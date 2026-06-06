@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>💗</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{
+      background:#0d0008;
+      overflow:hidden;
+      width:100vw;height:100vh;
+    }
+    body::before{
+      content:'';position:fixed;inset:0;
+      background:radial-gradient(ellipse 55% 50% at 50% 50%,
+        rgba(200,30,90,0.15) 0%,transparent 70%);
+      pointer-events:none;z-index:0;
+    }
+    canvas{position:relative;z-index:1;display:block;}
+    /* hidden canvas to sample text pixels */
+    #textCanvas{display:none;}
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="textCanvas"></canvas>
+<script>
+(() => {
+  const canvas     = document.getElementById('c');
+  const ctx        = canvas.getContext('2d');
+  const textCanvas = document.getElementById('textCanvas');
+  const tctx       = textCanvas.getContext('2d');
+
+  let W, H;
+  function resize(){
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', () => { resize(); build(); });
+
+  /* ── heart parametric ── */
+  function heartXY(t){
+    return {
+      x:  16 * Math.pow(Math.sin(t), 3),
+      y: -(13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t))
+    };
+  }
+
+  /* ── draw small heart ── */
+  function drawHeart(cx, cy, r, color, alpha, glow){
+    if(alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx, cy);
+    ctx.beginPath();
+    const N = 32;
+    for(let i = 0; i <= N; i++){
+      const p = heartXY((i/N)*Math.PI*2);
+      i===0 ? ctx.moveTo(p.x*r*0.063, p.y*r*0.063)
+            : ctx.lineTo(p.x*r*0.063, p.y*r*0.063);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    if(glow){ ctx.shadowColor = color; ctx.shadowBlur = r*1.8; }
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const PINKS = [
+    '#FF9EC4','#FF7BB0','#FF5C9B','#FF3080',
+    '#F91D6E','#E0145F','#FF85B3','#FFADD0',
+    '#FFD0E6','#F06090','#C8185A','#FF4499',
+    '#FF69B4','#FF1493','#FFB6C1','#DB7093',
+  ];
+  /* brighter/lighter pinks for text so it stands out */
+  const TEXT_PINKS = [
+    '#FFD6E8','#FFB3CF','#FF8FB6','#FF6BA0',
+    '#FF4D8C','#FF85B3','#FFC2D9','#FFADD0',
+    '#FF99C0','#FFE0EE','#FF75A8','#FFD0E6',
+  ];
+
+  function easeInOutCubic(t){ return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2; }
+  function easeOutQuart(t){ return 1-Math.pow(1-t,4); }
+  function bezier(s,cp,e,t){ const m=1-t; return m*m*s+2*m*t*cp+t*t*e; }
+
+  /* ── smooth noise ── */
+  function smoothNoise(x, seed){
+    const ix = Math.floor(x), fx = x-ix, u = fx*fx*(3-2*fx);
+    const r0 = Math.sin((ix  +seed)*127.1+(ix  +seed)*311.7)*43758.5453;
+    const r1 = Math.sin((ix+1+seed)*127.1+(ix+1+seed)*311.7)*43758.5453;
+    return (r0-Math.floor(r0))*(1-u)+(r1-Math.floor(r1))*u;
+  }
+
+  /* ── contour ── */
+  const CONTOUR_N = 800;
+  let contour = [];
+  let heartCX, heartCY, heartS;
+
+  function buildContour(){
+    heartS  = Math.min(W, H) * 0.42;
+    heartCX = W / 2;
+    heartCY = H / 2 + heartS * 0.06;
+    contour = [];
+    for(let i = 0; i < CONTOUR_N; i++){
+      const t = (i/CONTOUR_N)*Math.PI*2;
+      const p = heartXY(t);
+      contour.push({
+        x: heartCX + p.x*heartS*0.063,
+        y: heartCY + p.y*heartS*0.063,
+      });
+    }
+  }
+
+  function contourAt(u){
+    const idx = (((u%1)+1)%1)*CONTOUR_N;
+    const i0  = Math.floor(idx)%CONTOUR_N;
+    const i1  = (i0+1)%CONTOUR_N;
+    const f   = idx-Math.floor(idx);
+    return { x: contour[i0].x*(1-f)+contour[i1].x*f, y: contour[i0].y*(1-f)+contour[i1].y*f };
+  }
+
+  function contourNormal(u){
+    const eps=0.001, a=contourAt(u-eps), b=contourAt(u+eps);
+    const dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1;
+    return { nx: dy/len, ny: -dx/len };
+  }
+
+  /* ── sample text pixels → positions ── */
+  function getTextPositions(centerX, centerY, areaW, areaH){
+    const TC_W = 1800, TC_H = 420;
+    textCanvas.width  = TC_W;
+    textCanvas.height = TC_H;
+    tctx.clearRect(0,0,TC_W,TC_H);
+    tctx.fillStyle = '#fff';
+
+    const fontSize = Math.min(TC_W * 0.24, TC_H * 0.72, 280);
+    tctx.font = `900 ${fontSize}px Georgia, serif`;
+    tctx.textAlign    = 'center';
+    tctx.textBaseline = 'middle';
+    tctx.fillText('I Love You', TC_W/2, TC_H/2);
+
+    const data = tctx.getImageData(0,0,TC_W,TC_H).data;
+    const step = 7; // small step = many hearts, dense fill
+    const pts  = [];
+    for(let y=0; y<TC_H; y+=step){
+      for(let x=0; x<TC_W; x+=step){
+        const i = (y*TC_W+x)*4;
+        if(data[i+3] > 120){
+          const wx = centerX + (x/TC_W - 0.5)*areaW;
+          const wy = centerY + (y/TC_H - 0.5)*areaH;
+          pts.push({ x: wx, y: wy });
+        }
+      }
+    }
+    return pts;
+  }
+
+  /* ── particles ── */
+  let particles = [];
+  const FLY_DUR       = 1200;
+  const FLY_DUR_TEXT  = 2200; // slower for text hearts
+  const LAND_DUR = 350;
+  // text appears later, after contour hearts land
+  const TEXT_DELAY_BASE = 2200;
+
+  function makeOrbitParticle(contourU, i, count, delay){
+    const cp = contourAt(contourU);
+    const st = Math.random();
+    let sx, sy;
+    if     (st<0.30){ sx=Math.random()*W;           sy=H+50; }
+    else if(st<0.55){ sx=Math.random()<.5?-40:W+40; sy=Math.random()*H; }
+    else if(st<0.70){ sx=Math.random()*W;            sy=-50; }
+    else             { sx=Math.random()*W;            sy=Math.random()*H; }
+
+    return {
+      type: 'orbit',
+      sx, sy,
+      tx: cp.x, ty: cp.y,
+      x: sx, y: sy,
+      contourU,
+      size:  5+Math.random()*8,
+      color: PINKS[Math.floor(Math.random()*PINKS.length)],
+      delay,
+      born: null, phase:'fly', phaseStart:0,
+      landStartX:0, landStartY:0,
+      cpx: (sx+cp.x)/2+(Math.random()-0.5)*300,
+      cpy: (sy+cp.y)/2+(Math.random()-0.5)*300-90,
+      orbitSpeed: (0.000014+Math.random()*0.000018)*(Math.random()<0.5?1:-1),
+      radialAmp:   heartS*(0.04+Math.random()*0.10),
+      radialFreq1: 0.00055+Math.random()*0.00090,
+      radialFreq2: 0.00030+Math.random()*0.00060,
+      radialPhase1:Math.random()*Math.PI*2,
+      radialPhase2:Math.random()*Math.PI*2,
+      angularAmp:  0.008+Math.random()*0.025,
+      angularFreq: 0.00040+Math.random()*0.00070,
+      angularPhase:Math.random()*Math.PI*2,
+      noiseSeed:   Math.random()*9999,
+      noiseSpeed:  0.00008+Math.random()*0.00015,
+      pulsePhase:  Math.random()*Math.PI*2,
+      pulseSpeed:  0.0009+Math.random()*0.0012,
+    };
+  }
+
+  function makeTextParticle(tx, ty, delay){
+    // straight trajectory: start directly above or below the target
+    const fromTop = Math.random() < 0.5;
+    const sx = tx + (Math.random()-0.5)*30; // almost directly above/below
+    const sy = fromTop ? -50 : H+50;
+    return {
+      type: 'text',
+      sx, sy,
+      tx, ty,
+      x: sx, y: sy,
+      size: 1.8 + Math.random()*1.2,
+      color: TEXT_PINKS[Math.floor(Math.random()*TEXT_PINKS.length)],
+      delay,
+      born: null, phase:'fly', phaseStart:0,
+      landStartX:0, landStartY:0,
+      // straight trajectory
+      cpx: (sx+tx)/2 + (Math.random()-0.5)*18,
+      cpy: (sy+ty)/2 + (Math.random()-0.5)*18,
+      // minimal float
+      floatAmpX:  0.2+Math.random()*0.3,
+      floatAmpY:  0.2+Math.random()*0.3,
+      floatFreqX: 0.0003+Math.random()*0.0003,
+      floatFreqY: 0.0002+Math.random()*0.0003,
+      floatPhaseX:Math.random()*Math.PI*2,
+      floatPhaseY:Math.random()*Math.PI*2,
+      pulsePhase: Math.random()*Math.PI*2,
+      pulseSpeed: 0.0005+Math.random()*0.0005,
+    };
+  }
+
+  function build(){
+    buildContour();
+    particles = [];
+
+    /* ── contour particles ── */
+    const COUNT = Math.min(480, Math.floor((W*H)/2400));
+    for(let i=0; i<COUNT; i++){
+      const delay = 60 + i*(1600/COUNT) + Math.random()*250;
+      particles.push(makeOrbitParticle(i/COUNT, i, COUNT, delay));
+    }
+
+    /* ── text particles ── */
+    // text area is inside the heart — roughly middle third
+    const textAreaW = heartS * 1.45;
+    const textAreaH = heartS * 0.62;
+    const textCX    = heartCX;
+    const textCY    = heartCY + heartS * 0.02;
+
+    const textPts = getTextPositions(textCX, textCY, textAreaW, textAreaH);
+    // shuffle so they don't appear left-to-right in order
+    for(let i = textPts.length-1; i>0; i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [textPts[i], textPts[j]] = [textPts[j], textPts[i]];
+    }
+    textPts.forEach((pt, idx) => {
+      // chaotic: big random spread over 4 seconds, no sequential order
+      const delay = TEXT_DELAY_BASE + Math.random()*4000;
+      particles.push(makeTextParticle(pt.x, pt.y, delay));
+    });
+  }
+
+  /* ── loop ── */
+  let startTime = null, lastTs = 0;
+
+  function loop(ts){
+    if(!startTime) startTime = ts;
+    const elapsed = ts - startTime;
+    const dt = Math.min(ts - lastTs, 50);
+    lastTs = ts;
+
+    ctx.fillStyle = 'rgba(13,0,8,0.26)';
+    ctx.fillRect(0,0,W,H);
+
+    for(const p of particles){
+
+      if(p.born === null){
+        if(elapsed < p.delay) continue;
+        p.born = ts;
+        p.phaseStart = ts;
+      }
+
+      /* ─── FLY ─── */
+      if(p.phase === 'fly'){
+        const dur   = p.type === 'text' ? FLY_DUR_TEXT : FLY_DUR;
+        const prog  = Math.min(1,(ts-p.phaseStart)/dur);
+        const eased = p.type === 'text' ? easeOutQuart(prog) : easeInOutCubic(prog);
+        p.x = bezier(p.sx, p.cpx, p.tx, eased);
+        p.y = bezier(p.sy, p.cpy, p.ty, eased);
+        const glow = p.type !== 'text';
+        drawHeart(p.x, p.y, p.size*(0.4+eased*0.6), p.color, 0.3+eased*0.7, glow);
+        if(prog >= 1){
+          p.phase='land'; p.phaseStart=ts;
+          p.landStartX=p.x; p.landStartY=p.y;
+        }
+      }
+
+      /* ─── LAND ─── */
+      else if(p.phase === 'land'){
+        const prog  = Math.min(1,(ts-p.phaseStart)/LAND_DUR);
+        const eased = easeOutQuart(prog);
+        const ex = p.type==='orbit'? contourAt(p.contourU).x : p.tx;
+        const ey = p.type==='orbit'? contourAt(p.contourU).y : p.ty;
+        p.x = p.landStartX+(ex-p.landStartX)*eased;
+        p.y = p.landStartY+(ey-p.landStartY)*eased;
+        drawHeart(p.x, p.y, p.size, p.color, 1, true);
+        if(prog >= 1){ p.phase='orbit_idle'; p.phaseStart=ts; }
+      }
+
+      /* ─── ORBIT (contour hearts) ─── */
+      else if(p.phase === 'orbit_idle' && p.type === 'orbit'){
+        p.contourU = (p.contourU + p.orbitSpeed*dt + 2)%1;
+        const angWobble = p.angularAmp*Math.sin(ts*p.angularFreq+p.angularPhase);
+        const u   = (p.contourU+angWobble+2)%1;
+        const base = contourAt(u);
+        const norm = contourNormal(u);
+        const noiseVal = smoothNoise(ts*p.noiseSpeed, p.noiseSeed)*2-1;
+        const radial =
+          p.radialAmp*0.55*Math.sin(ts*p.radialFreq1+p.radialPhase1)+
+          p.radialAmp*0.30*Math.sin(ts*p.radialFreq2+p.radialPhase2)+
+          p.radialAmp*0.15*noiseVal;
+        p.x = base.x+norm.nx*radial;
+        p.y = base.y+norm.ny*radial;
+        const pulse = 1+0.10*Math.sin(ts*p.pulseSpeed+p.pulsePhase);
+        drawHeart(p.x, p.y, p.size*pulse, p.color, 1, true);
+      }
+
+      /* ─── TEXT hearts: minimal animation ─── */
+      else if(p.phase === 'orbit_idle' && p.type === 'text'){
+        const fx = p.floatAmpX*Math.sin(ts*p.floatFreqX+p.floatPhaseX);
+        const fy = p.floatAmpY*Math.sin(ts*p.floatFreqY+p.floatPhaseY);
+        const pulse = 1+0.03*Math.sin(ts*p.pulseSpeed+p.pulsePhase);
+        drawHeart(p.tx+fx, p.ty+fy, p.size*pulse, p.color, 1, false);
+      }
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  build();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
